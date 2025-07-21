@@ -9,7 +9,11 @@ from qlib.model.riskmodel import StructuredCovEstimator
 
 
 def prepare_data(riskdata_root="./riskdata", T=240, start_time="2016-01-01"):
-    universe = D.features(D.instruments("csi300"), ["$close"], start_time=start_time).swaplevel().sort_index()
+    # universe = D.features(D.instruments("csi300"), ["$close"], start_time=start_time).swaplevel().sort_index()
+    import pudb; pudb.set_trace()
+    tmp = D.instruments("csi300")
+    features = D.features(tmp, ["$close"], start_time=start_time)
+    universe = features.swaplevel().sort_index()
 
     price_all = (
         D.features(D.instruments("all"), ["$close"], start_time=start_time).squeeze().unstack(level="instrument")

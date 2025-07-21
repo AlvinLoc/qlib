@@ -32,6 +32,7 @@ from qlib.workflow import R
 from qlib.workflow.recorder import Recorder
 from qlib.workflow.task.manage import TaskManager, run_task
 
+logger = get_module_logger("Trainer")
 
 def _log_task_info(task_config: dict):
     R.log_params(**flatten_dict(task_config))
@@ -58,6 +59,7 @@ def _exe_task(task_config: dict):
     records = task_config.get("record", [])
     if isinstance(records, dict):  # prevent only one dict
         records = [records]
+    logger.info(f"records length: {len(records)}")
     for record in records:
         # Some recorder require the parameter `model` and `dataset`.
         # try to automatically pass in them to the initialization function
@@ -68,6 +70,7 @@ def _exe_task(task_config: dict):
             default_module="qlib.workflow.record_temp",
             try_kwargs={"model": model, "dataset": dataset},
         )
+        logger.info(f"record: {record.get('class')}")
         r.generate()
 
 

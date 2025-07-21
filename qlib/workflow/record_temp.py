@@ -1,16 +1,20 @@
 #  Copyright (c) Microsoft Corporation.
 #  Licensed under the MIT License.
-
+import os
 import logging
 import warnings
 import pandas as pd
 import numpy as np
+from datetime import datetime
 from tqdm import trange
 from pprint import pprint
 from typing import Union, List, Optional, Dict
 
+from qlib.backtest import account
 from qlib.utils.exceptions import LoadObjectError
+from qlib.contrib.report.analysis_position.report import report_graph
 from ..contrib.evaluate import risk_analysis, indicator_analysis
+from tqdm import tqdm
 
 from ..data.dataset import DatasetH
 from ..data.dataset.handler import DataHandlerLP
@@ -355,6 +359,16 @@ class SigAnaRecord(ACRecordTemp):
             paths.extend(["long_short_r.pkl", "long_avg_r.pkl"])
         return paths
 
+from pydantic import BaseModel
+class StockStatus(BaseModel):
+    date: str
+    cash: float
+    now_account_value: float
+    stock: str
+    amount: float
+    price: float
+    weight: float
+    count_day: int
 
 class PortAnaRecord(ACRecordTemp):
     """
@@ -491,13 +505,57 @@ class PortAnaRecord(ACRecordTemp):
             artifact_objects.update({f"indicators_normal_{_freq}.pkl": indicators_normal[0]})
             artifact_objects.update({f"indicators_normal_{_freq}_obj.pkl": indicators_normal[1]})
 
+        # import pudb; pudb.set_trace()
+        os.makedirs("backtest_vis", exist_ok=True)
         for _analysis_freq in self.risk_analysis_freq:
+            save_dir = f"backtest_vis/{str(self.strategy_config['class'])}_{_analysis_freq}_{datetime.now().strftime('%Y%m%d')}"
+            os.makedirs(save_dir, exist_ok=True)
             if _analysis_freq not in portfolio_metric_dict:
                 warnings.warn(
                     f"the freq {_analysis_freq} report is not found, please set the corresponding env with `generate_portfolio_metrics=True`"
                 )
             else:
-                report_normal, _ = portfolio_metric_dict.get(_analysis_freq)
+                report_normal, positions_normal = portfolio_metric_dict.get(_analysis_freq)
+                fig_list = report_graph(report_normal, show_notebook=False)
+                for idx, fig in enumerate(fig_list):
+                    fig.write_html(f"{save_dir}/portfolio_vis_{idx}.html")
+                # positions_normal.to_csv(f"{save_dir}/positions_normal.csv")
+                stock_status_list = []
+                for ts, v in tqdm(positions_normal.items(), desc=f"to csv {_analysis_freq}"):
+                    position = v.position
+                    cash = position["cash"]
+                    now_account_value = position["now_account_value"]
+                    for stock, info in position.items():
+                        if stock in ["cash", "now_account_value"]:
+                            continue
+                        stock_status_list.append(StockStatus(
+                            date=str(ts),
+                            cash=cash,
+                            now_account_value=now_account_value,
+                            stock=stock,
+                            amount=info["amount"],
+                            price=info["price"],
+                            weight=info["weight"],
+                            count_day=info["count_day"],
+                        ))
+                df = pd.DataFrame(
+                    [
+                        {
+                            "date": status.date,
+                            "cash": status.cash,
+                            "now_account_value": status.now_account_value,
+                            "stock": status.stock,
+                            "amount": status.amount,
+                            "price": status.price,
+                            "weight": status.weight,
+                            "count_day": status.count_day,
+                        }
+                        for status in stock_status_list
+                    ]
+                )
+                csv_path = f"{save_dir}/positions_normal_{_analysis_freq}.csv"
+                df.to_csv(csv_path, index=False, encoding="utf-8")
+
                 analysis = dict()
                 analysis["excess_return_without_cost"] = risk_analysis(
                     report_normal["return"] - report_normal["bench"], freq=_analysis_freq

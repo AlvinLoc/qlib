@@ -36,6 +36,7 @@ if __name__ == "__main__":
         },
         "strategy": {
             "class": "TopkDropoutStrategy",
+            # "class": "MovingAverageStrategy",
             "module_path": "qlib.contrib.strategy.signal_strategy",
             "kwargs": {
                 "signal": (model, dataset),
@@ -48,6 +49,7 @@ if __name__ == "__main__":
             "end_time": "2020-08-01",
             "account": 100000000,
             "benchmark": CSI300_BENCH,
+            # "benchmark": "SH000001",
             "exchange_kwargs": {
                 "freq": "day",
                 "limit_threshold": 0.095,
@@ -65,6 +67,8 @@ if __name__ == "__main__":
     print(example_df.head())
 
     # start exp
+    import pudb
+    pudb.set_trace()
     with R.start(experiment_name="workflow"):
         R.log_params(**flatten_dict(CSI300_GBDT_TASK))
         model.fit(dataset)
@@ -82,4 +86,5 @@ if __name__ == "__main__":
         # backtest. If users want to use backtest based on their own prediction,
         # please refer to https://qlib.readthedocs.io/en/latest/component/recorder.html#record-template.
         par = PortAnaRecord(recorder, port_analysis_config, "day")
-        par.generate()
+        res = par.generate()
+        print("done")

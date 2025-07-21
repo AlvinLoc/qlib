@@ -17,7 +17,7 @@ from qlib.backtest.position import Position
 from qlib.backtest.signal import Signal, create_signal_from
 from qlib.backtest.decision import Order, OrderDir, TradeDecisionWO
 from qlib.log import get_module_logger
-from qlib.utils import get_pre_trading_date, load_dataset
+from qlib.utils import get_date_by_shift, get_pre_trading_date, load_dataset
 from qlib.contrib.strategy.order_generator import OrderGenerator, OrderGenWOInteract
 from qlib.contrib.strategy.optimizer import EnhancedIndexingOptimizer
 
@@ -520,3 +520,180 @@ class EnhancedIndexingStrategy(WeightStrategyBase):
             self.logger.info("total holding weight: {:.6f}".format(weight.sum()))
 
         return target_weight_position
+
+
+class MovingAverageStrategy(BaseSignalStrategy):
+    """均线选股策略
+    实现5日均线上穿10日均线(第二次或第三次金叉)、MACD底背离、成交量配合和30日均线突破的选股逻辑
+    """
+    def __init__(
+        self,
+        *, 
+        ma_short=5,          # 短期均线周期
+        ma_medium=10,        # 中期均线周期
+        ma_long=30,          # 长期均线周期
+        macd_fast=12,        # MACD快线周期
+        macd_slow=26,        # MACD慢线周期
+        macd_signal=9,       # MACD信号线周期
+        vol_window=20,       # 成交量参考窗口
+        vol_threshold=1.5,   # 成交量放大阈值
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.ma_short = ma_short
+        self.ma_medium = ma_medium
+        self.ma_long = ma_long
+        self.macd_fast = macd_fast
+        self.macd_slow = macd_slow
+        self.macd_signal = macd_signal
+        self.vol_window = vol_window
+        self.vol_threshold = vol_threshold
+        self.cross_history = dict()  # 存储金叉历史: {stock_id: [(date, cross_count), ...]}
+
+    def calculate_indicators(self, stock_id, trade_date):
+        """计算单个股票的技术指标"""
+        # 获取所需K线数据(包含收盘价、成交量)
+        # start_date = get_pre_trading_date(trade_date, n=self.macd_slow + self.vol_window)
+        start_date = get_date_by_shift(trade_date, -self.macd_slow - self.vol_window)
+        end_date = trade_date
+        klines = D.features(
+            [stock_id],
+            [f"$close", f"$volume"],
+            start_time=start_date, 
+            end_time=end_date
+        )
+        if klines.empty:
+            return None
+
+        # 计算均线
+        klines[f"ma{self.ma_short}"] = klines[f"$close"].rolling(self.ma_short).mean()
+        klines[f"ma{self.ma_medium}"] = klines[f"$close"].rolling(self.ma_medium).mean()
+        klines[f"ma{self.ma_long}"] = klines[f"$close"].rolling(self.ma_long).mean()
+
+        # 计算MACD
+        ema_fast = klines[f"$close"].ewm(span=self.macd_fast, adjust=False).mean()
+        ema_slow = klines[f"$close"].ewm(span=self.macd_slow, adjust=False).mean()
+        klines["dif"] = ema_fast - ema_slow
+        klines["dea"] = klines["dif"].ewm(span=self.macd_signal, adjust=False).mean()
+        klines["macd"] = 2 * (klines["dif"] - klines["dea"])
+
+        # 计算成交量指标
+        klines["vol_mean"] = klines[f"$volume"].rolling(self.vol_window).mean()
+        klines["vol_ratio"] = klines[f"$volume"] / klines["vol_mean"]
+
+        return klines.iloc[-1]  # 返回最新一天的指标
+
+    def detect_golden_cross(self, indicators, stock_id, trade_date):
+        """检测均线金叉并记录次数"""
+        # 检查是否金叉(短期均线上穿中期均线)
+        if np.isnan(indicators[f"ma{self.ma_short}"]) or np.isnan(indicators[f"ma{self.ma_medium}"]):
+            return 0
+
+        # 前一天的指标
+        prev_date = get_pre_trading_date(trade_date)
+        prev_indicators = self.calculate_indicators(stock_id, prev_date)
+        if prev_indicators is None:
+            return 0
+
+        # 判断金叉
+        golden_cross = (
+            prev_indicators[f"ma{self.ma_short}"] < prev_indicators[f"ma{self.ma_medium}"] and 
+            indicators[f"ma{self.ma_short}"] > indicators[f"ma{self.ma_medium}"]
+        )
+
+        # 更新金叉历史
+        if stock_id not in self.cross_history:
+            self.cross_history[stock_id] = []
+
+        if golden_cross:
+            # 检查是否是同一天的重复记录
+            if not self.cross_history[stock_id] or self.cross_history[stock_id][-1][0] != trade_date:
+                # 计算当前是第几次金叉
+                cross_count = len(self.cross_history[stock_id]) + 1
+                self.cross_history[stock_id].append((trade_date, cross_count))
+                return cross_count
+        return 0
+
+    def detect_macd_bottom_divergence(self, stock_id, trade_date):
+        """检测MACD底背离"""
+        # 获取最近一段时间的价格和MACD数据
+        start_date = get_pre_trading_date(trade_date, n=30)
+        klines = D.features(
+            [stock_id],
+            [f"$close", "$volume"],
+            start_time=start_date, 
+            end_time=trade_date
+        )
+        if len(klines) < 10:
+            return False
+
+        # 计算MACD
+        ema_fast = klines[f"$close"].ewm(span=self.macd_fast, adjust=False).mean()
+        ema_slow = klines[f"$close"].ewm(span=self.macd_slow, adjust=False).mean()
+        klines["macd"] = 2 * (ema_fast - ema_slow)
+
+        # 寻找价格低点和MACD低点
+        price_lows = klines[f"$close"].iloc[-10:].nsmallest(2)
+        macd_lows = klines["macd"].iloc[-10:].nsmallest(2)
+
+        # 底背离条件: 价格创新低，MACD未创新低
+        if len(price_lows) < 2 or len(macd_lows) < 2:
+            return False
+
+        price_low1, price_low2 = price_lows.iloc[0], price_lows.iloc[1]
+        macd_low1, macd_low2 = macd_lows.iloc[0], macd_lows.iloc[1]
+
+        return price_low1 < price_low2 and macd_low1 > macd_low2
+
+    def generate_trade_decision(self, execute_result=None):
+        trade_step = self.trade_calendar.get_trade_step()
+        trade_start_time, trade_end_time = self.trade_calendar.get_step_time(trade_step)
+        trade_date = trade_start_time
+
+        buy_order_list = []
+        # 获取所有股票池
+        universe = D.instruments(market=self.market) if hasattr(self, 'market') else D.instruments('all')
+
+        for stock_id in universe:
+            # 计算技术指标
+            indicators = self.calculate_indicators(stock_id, trade_date)
+            if indicators is None:
+                continue
+
+            # 检测金叉次数
+            cross_count = self.detect_golden_cross(indicators, stock_id, trade_date)
+            if cross_count not in [2, 3]:  # 只考虑第二次或第三次金叉
+                continue
+
+            # 检测MACD底背离
+            if not self.detect_macd_bottom_divergence(stock_id, trade_date):
+                continue
+
+            # 第二次金叉需要成交量配合
+            if cross_count == 2 and indicators["vol_ratio"] < self.vol_threshold:
+                continue
+
+            # 检查是否突破30日均线
+            if indicators[f"$close"] <= indicators[f"ma{self.ma_long}"]:
+                continue
+
+            # 所有条件满足，生成买入订单
+            if self.trade_exchange.is_stock_tradable(stock_id, trade_start_time, trade_end_time):
+                # 计算买入金额(均等分配风险资金)
+                cash = self.trade_position.get_cash()
+                buy_value = cash * self.risk_degree / len(buy_order_list + [1])  # +1是因为当前股票还未加入列表
+                buy_price = self.trade_exchange.get_deal_price(stock_id, trade_start_time, trade_end_time, OrderDir.BUY)
+                buy_amount = buy_value / buy_price
+                factor = self.trade_exchange.get_factor(stock_id, trade_start_time, trade_end_time)
+                buy_amount = self.trade_exchange.round_amount_by_trade_unit(buy_amount, factor)
+
+                buy_order = Order(
+                    stock_id=stock_id,
+                    amount=buy_amount,
+                    start_time=trade_start_time,
+                    end_time=trade_end_time,
+                    direction=Order.BUY
+                )
+                buy_order_list.append(buy_order)
+
+        return TradeDecisionWO(buy_order_list, self)

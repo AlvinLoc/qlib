@@ -563,20 +563,23 @@ class DatasetProvider(abc.ABC):
 
         inst_l = []
         task_l = []
-        for inst, spans in it:
-            inst_l.append(inst)
-            task_l.append(
-                delayed(DatasetProvider.inst_calculator)(
-                    inst, start_time, end_time, freq, normalize_column_names, spans, C, inst_processors
-                )
-            )
+        # for inst, spans in it:
+        #     inst_l.append(inst)
+        #     task_l.append(
+        #         delayed(DatasetProvider.inst_calculator)(
+        #             inst, start_time, end_time, freq, normalize_column_names, spans, C, inst_processors
+        #         )
+        #     )
 
-        data = dict(
-            zip(
-                inst_l,
-                ParallelExt(n_jobs=workers, backend=C.joblib_backend, maxtasksperchild=C.maxtasksperchild)(task_l),
-            )
-        )
+        # data = dict(
+        #     zip(
+        #         inst_l,
+        #         ParallelExt(n_jobs=workers, backend=C.joblib_backend, maxtasksperchild=C.maxtasksperchild)(task_l),
+        #     )
+        # )
+        data = dict()
+        for inst, spans in it:
+            data[inst] = DatasetProvider.inst_calculator(inst, start_time, end_time, freq, normalize_column_names, spans, C, inst_processors)
 
         new_data = dict()
         for inst in sorted(data.keys()):

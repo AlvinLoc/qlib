@@ -8,7 +8,8 @@ import re
 from logging import config as logging_config
 from time import time
 from contextlib import contextmanager
-
+import os
+from datetime import datetime
 from .config import C
 
 
@@ -31,11 +32,25 @@ class QlibLogger(metaclass=MetaLogger):
         # this feature name conflicts with the attribute with Logger
         # rename it to avoid some corner cases that result in comparing `str` and `int`
         self.__level = 0
+        self.log_dir = os.path.join(os.getcwd(), "logs", datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
+        os.makedirs(self.log_dir, exist_ok=True)
 
     @property
     def logger(self):
         logger = logging.getLogger(self.module_name)
         logger.setLevel(self.__level)
+
+        # # add module file handler
+        # file_handler = logging.FileHandler(f"{self.log_dir}/{self.module_name}.log")
+        # file_handler.setLevel(self.__level)
+        # file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        # logger.addHandler(file_handler)
+        # # add common file handler
+        file_handler = logging.FileHandler(f"{self.log_dir}/qlib.log")
+        file_handler.setLevel(self.__level)
+        file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        logger.addHandler(file_handler)
+
         return logger
 
     def setLevel(self, level):

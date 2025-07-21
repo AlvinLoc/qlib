@@ -83,7 +83,10 @@ def render_template(config_path: str) -> str:
 
 
 # workflow handler function
+# import pudb
+DEBUG_MODE = True
 def workflow(config_path, experiment_name="workflow", uri_folder="mlruns"):
+    # pudb.set_trace()
     """
     This is a Qlib CLI entrance.
     User can run the whole Quant research workflow defined by a configure file
@@ -140,6 +143,9 @@ def workflow(config_path, experiment_name="workflow", uri_folder="mlruns"):
     else:
         exp_manager = C["exp_manager"]
         exp_manager["kwargs"]["uri"] = "file:" + str(Path(os.getcwd()).resolve() / uri_folder)
+        if DEBUG_MODE:
+            if os.path.exists(exp_manager["kwargs"]["uri"]):
+                os.remove(exp_manager["kwargs"]["uri"])
         qlib.init(**config.get("qlib_init"), exp_manager=exp_manager)
 
     if "experiment_name" in config:
