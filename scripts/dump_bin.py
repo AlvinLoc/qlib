@@ -16,6 +16,46 @@ from tqdm import tqdm
 from loguru import logger
 from qlib.utils import fname_to_code, code_to_fname
 
+import os
+import signal
+import threading
+import time
+import psutil
+from functools import wraps
+
+def memory_guard(min_free_gb=1, check_interval=1):
+    """
+    装饰器：轮询系统内存剩余量，若低于min_free_gb（单位GB），则发出警告并kill被装饰的函数。
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            stop_event = threading.Event()
+            main_thread = threading.current_thread()
+
+            def monitor():
+                while not stop_event.is_set():
+                    mem = psutil.virtual_memory()
+                    free_gb = mem.available / (1024 ** 3)
+                    if free_gb < min_free_gb:
+                        logger.warning(f"系统剩余内存不足{min_free_gb}GB，当前剩余: {free_gb:.2f}GB，终止函数执行。")
+                        # 终止主线程进程
+                        os.kill(os.getpid(), signal.SIGKILL)
+                    else:
+                        logger.info(f"系统剩余内存充足，当前剩余: {free_gb:.2f}GB")
+                    time.sleep(check_interval)
+
+            monitor_thread = threading.Thread(target=monitor, daemon=True)
+            monitor_thread.start()
+            try:
+                result = func(*args, **kwargs)
+            finally:
+                stop_event.set()
+            return result
+        return wrapper
+    return decorator
+
+
 
 class DumpDataBase:
     INSTRUMENTS_START_FIELD = "start_datetime"
@@ -235,6 +275,8 @@ class DumpDataBase:
                 np.hstack([date_index, _df[field]]).astype("<f").tofile(str(bin_path.resolve()))
 
     def _dump_bin(self, file_or_data: [Path, pd.DataFrame], calendar_list: List[pd.Timestamp]):
+        if isinstance(file_or_data, Path):
+            logger.critical(f"dump bin {file_or_data.name} ")
         if not calendar_list:
             logger.warning("calendar_list is empty")
             return
@@ -309,6 +351,18 @@ class DumpDataAll(DumpDataBase):
             with ProcessPoolExecutor(max_workers=self.works) as executor:
                 for _ in executor.map(_dump_func, self.csv_files):
                     p_bar.update()
+
+        # from multiprocessing import Pool
+        # with Pool(2) as p:
+        #     for _ in tqdm(p.imap_unordered(_dump_func, self.csv_files), total=len(self.csv_files)):
+        #         pass
+
+        # # single process
+        # for csv_file in tqdm(self.csv_files):
+        #     try:
+        #         self._dump_bin(csv_file, self._calendars_list)
+        #     except Exception as e:
+        #         logger.error(f"dump bin {csv_file.name} error: {e}")
 
         logger.info("end of features dump.\n")
 
@@ -453,44 +507,80 @@ class DumpDataUpdate(DumpDataBase):
     def _dump_instruments(self):
         pass
 
+    @memory_guard(min_free_gb=1)
     def _dump_features(self):
+        # logger.info("start dump features......")
+        # error_code = {}
+        # with ProcessPoolExecutor(max_workers=self.works // 2) as executor:
+        #     futures = {}
+        #     for _code, _df in self._all_data.groupby(self.symbol_field_name, group_keys=False):
+        #         _code = fname_to_code(str(_code).lower()).upper()
+        #         _start, _end = self._get_date(_df, is_begin_end=True)
+        #         if not (isinstance(_start, pd.Timestamp) and isinstance(_end, pd.Timestamp)):
+        #             continue
+        #         if _code in self._update_instruments:
+        #             # exists stock, will append data
+        #             _update_calendars = (
+        #                 _df[_df[self.date_field_name] > self._update_instruments[_code][self.INSTRUMENTS_END_FIELD]][
+        #                     self.date_field_name
+        #                 ]
+        #                 .sort_values()
+        #                 .to_list()
+        #             )
+        #             if _update_calendars:
+        #                 self._update_instruments[_code][self.INSTRUMENTS_END_FIELD] = self._format_datetime(_end)
+        #                 futures[executor.submit(self._dump_bin, _df, _update_calendars)] = _code
+        #         else:
+        #             # new stock
+        #             _dt_range = self._update_instruments.setdefault(_code, dict())
+        #             _dt_range[self.INSTRUMENTS_START_FIELD] = self._format_datetime(_start)
+        #             _dt_range[self.INSTRUMENTS_END_FIELD] = self._format_datetime(_end)
+        #             futures[executor.submit(self._dump_bin, _df, self._new_calendar_list)] = _code
+
+        #     with tqdm(total=len(futures)) as p_bar:
+        #         for _future in as_completed(futures):
+        #             try:
+        #                 _future.result()
+        #             except Exception:
+        #                 error_code[futures[_future]] = traceback.format_exc()
+        #             p_bar.update()
+        #     logger.info(f"dump bin errors: {error_code}")
+
+        # logger.info("end of features dump.\n")
+        # def _dump_features(self):
         logger.info("start dump features......")
         error_code = {}
-        with ProcessPoolExecutor(max_workers=self.works) as executor:
-            futures = {}
+        total = self._all_data.groupby(self.symbol_field_name, group_keys=False).ngroups
+        with tqdm(total=total) as p_bar:
             for _code, _df in self._all_data.groupby(self.symbol_field_name, group_keys=False):
                 _code = fname_to_code(str(_code).lower()).upper()
                 _start, _end = self._get_date(_df, is_begin_end=True)
                 if not (isinstance(_start, pd.Timestamp) and isinstance(_end, pd.Timestamp)):
-                    continue
-                if _code in self._update_instruments:
-                    # exists stock, will append data
-                    _update_calendars = (
-                        _df[_df[self.date_field_name] > self._update_instruments[_code][self.INSTRUMENTS_END_FIELD]][
-                            self.date_field_name
-                        ]
-                        .sort_values()
-                        .to_list()
-                    )
-                    if _update_calendars:
-                        self._update_instruments[_code][self.INSTRUMENTS_END_FIELD] = self._format_datetime(_end)
-                        futures[executor.submit(self._dump_bin, _df, _update_calendars)] = _code
-                else:
-                    # new stock
-                    _dt_range = self._update_instruments.setdefault(_code, dict())
-                    _dt_range[self.INSTRUMENTS_START_FIELD] = self._format_datetime(_start)
-                    _dt_range[self.INSTRUMENTS_END_FIELD] = self._format_datetime(_end)
-                    futures[executor.submit(self._dump_bin, _df, self._new_calendar_list)] = _code
-
-            with tqdm(total=len(futures)) as p_bar:
-                for _future in as_completed(futures):
-                    try:
-                        _future.result()
-                    except Exception:
-                        error_code[futures[_future]] = traceback.format_exc()
                     p_bar.update()
-            logger.info(f"dump bin errors: {error_code}")
-
+                    continue
+                try:
+                    if _code in self._update_instruments:
+                        # exists stock, will append data
+                        _update_calendars = (
+                            _df[_df[self.date_field_name] > self._update_instruments[_code][self.INSTRUMENTS_END_FIELD]][
+                                self.date_field_name
+                            ]
+                            .sort_values()
+                            .to_list()
+                        )
+                        if _update_calendars:
+                            self._update_instruments[_code][self.INSTRUMENTS_END_FIELD] = self._format_datetime(_end)
+                            self._dump_bin(_df, _update_calendars)
+                    else:
+                        # new stock
+                        _dt_range = self._update_instruments.setdefault(_code, dict())
+                        _dt_range[self.INSTRUMENTS_START_FIELD] = self._format_datetime(_start)
+                        _dt_range[self.INSTRUMENTS_END_FIELD] = self._format_datetime(_end)
+                        self._dump_bin(_df, self._new_calendar_list)
+                except Exception:
+                    error_code[_code] = traceback.format_exc()
+                p_bar.update()
+        logger.info(f"dump bin errors: {error_code}")
         logger.info("end of features dump.\n")
 
     def dump(self):

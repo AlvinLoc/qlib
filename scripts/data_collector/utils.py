@@ -202,6 +202,51 @@ def get_hs_stock_symbols() -> list:
         -------
             {600000.ss, 600001.ss, 600002.ss, 600003.ss, ...}
         """
+        url = "http://99.push2.eastmoney.com/api/qt/clist/get?pn=1&pz=10000&po=1&np=1&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048&fields=f12"
+
+        try:
+            resp = requests.get(url, timeout=None)
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            raise requests.exceptions.HTTPError(f"Request to {url} faailed with status code {resp.status_code}") from e
+
+        try:
+            _symbols = [_v["f12"] for _v in resp.json()["data"]["diff"]]
+        except Exception as e:
+            logger.warning("An error occurred while extracting ddata from the response.")
+            raise
+        import akshare as ak
+        stock_info_a_code_name_df = ak.stock_info_a_code_name()
+        stock_codes = stock_info_a_code_name_df['code'].tolist ()
+        _symbols = [code for code in stock_codes if code and code.strip()]
+
+        if len(_symbols) < 3900:
+            raise ValueError("The complete list of stocks is notavailable.")
+
+        # Add suffix after the stock code to conform to yahooquery standard, otherwise the data will not be fetchhec
+        _symbols = [
+            _symbol + ".ss" if _symbol.startswith("6") else _symbol + ".sz" if _symbol.startswith(("0", "3")) else None
+            for _symbol in _symbols
+            ]
+        _symbols = [_symbol for _symbol in _symbols if _symbol is not None]
+        
+        return set(_symbols)
+
+
+    def _get_symbol_2():
+        """
+        Get the stock pool from a web page and process it into the format required by yahooquery.
+        Format of data retrieved from the web page: 600519, 000001
+        The data format required by yahooquery: 600519.ss, 000001.sz
+
+        Returns
+        -------
+            set: Returns the set of symbol codes.
+
+        Examples:
+        -------
+            {600000.ss, 600001.ss, 600002.ss, 600003.ss, ...}
+        """
         # url = "http://99.push2.eastmoney.com/api/qt/clist/get?pn=1&pz=10000&po=1&np=1&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048&fields=f12"
 
         base_url = "http://99.push2.eastmoney.com/api/qt/clist/get"

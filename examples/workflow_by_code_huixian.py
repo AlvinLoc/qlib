@@ -31,13 +31,13 @@ if __name__ == "__main__":
 
     # 2.获取所有证券代码
     instruments = D.instruments(market='all')
-    stock_list = D.list_instruments(instruments=instruments,
-    start_time='2008-01-01',
-    end_time='2025-06-20',
-    as_list=True)
-    # 展示后5个股票代码
-    print("数据集中展示后5个股票代码：")
-    print(stock_list[-5:])
+    stock_list = D.list_instruments(
+        instruments=instruments,
+        # start_time='2008-01-01',
+        # end_time='2025-06-20',
+        as_list=True)
+
+    print(f"所有股票数量: {len(stock_list)}")
 
 
     from qlib.data.filter import NameDFilter, ExpressionDFilter
@@ -46,8 +46,7 @@ if __name__ == "__main__":
     # 动态Filter:后复权价格大于等于1元
     expressionDFilter = ExpressionDFilter(rule_expression = '$close>=1')
     #按以上两个过滤条件获取新的股票代码集
-    # instruments = D.instruments(market='all')
-    instruments = D.instruments(market='csi300')
+    instruments = D.instruments(market='all')
     stock_list = D.list_instruments(
         instruments=instruments,
         start_time='2008-01-01',
@@ -65,10 +64,6 @@ if __name__ == "__main__":
     #  freq='day')
     # print(features_df.head())
 
-
-    # model = init_instance_by_config(CSI300_GBDT_TASK["model"])
-    # dataset = init_instance_by_config(CSI300_GBDT_TASK["dataset"])
-
     data_handler_config = {
 
         # 完整数据起止日期
@@ -80,16 +75,24 @@ if __name__ == "__main__":
         "fit_end_time": "2018-12-31",
 
         # 股票池
-
-        "instruments": instruments,
-        # "instruments": "csi300" , # 沪深300
+        # "instruments": instruments,
+        "instruments": "csi300" , # 沪深300
         # "instruments": "csi500" , # 中证500
         # "instruments": "csi1000" , # 中证1000
         # "instruments": "csi3000" , # 中证3000
         # "instruments": "csi5000" , # 中证5000
         # "instruments": "csi10000" , # 中证10000
         # "instruments": "csi100000" , # 中证100000
+        # "instruments": "sz500" , # 上证500
+        # "instruments": "sz1000" , # 上证1000
+        # "instruments": "sz1500" , # 上证1500
+        # "instruments": "sz2000" , # 上证2000
+        # "instruments": "sz2500" , # 上证2500
+        # "instruments": "sz3000" , # 上证3000
+        # "instruments": "sz3500" , # 上证3500
     }
+
+    print(f"data_handler_config: {data_handler_config}")
 
     task = {
         "model": {
@@ -114,31 +117,43 @@ if __name__ == "__main__":
                 "num_boost_round": 2000,  # 最大轮数
             },
         },
+
+        # （数据集）-参数及说明
         "dataset": {
-            "class": "DatasetH",
-            "module_path": "qlib.data.dataset",
+            "class": "DatasetH", # 数据集名称
+            "module_path": "qlib.data.dataset", # 数据集所在路径
+
+            # DatasetH模型参数
             "kwargs": {
+                # 因子库参数
                 "handler": {
                     # Alpha158和Alpha360两类量价因子库，可根据需要自定义因子库
-                    "class": "Alpha158", 
-                    "module_path": "qlib.contrib.data.handler",
-                    "kwargs": data_handler_config,
+                    "class": "Alpha158", # 因子库名称，此处使用qlib自带的Alpha158
+                    "module_path": "qlib.contrib.data.handler", # 因子库所在路径
+                    "kwargs": data_handler_config, # Alpha158的参数
                 },
+                # 数据集划分参数
                 "segments": {
-                    "train": ("2008-01-01", "2018-12-31"),
-                    "valid": ("2019-01-01", "2020-12-31"),
-                    "test": ("2021-01-01", "2025-06-20"),
+                    "train": ("2008-01-01", "2018-12-31"), # 训练集
+                    "valid": ("2019-01-01", "2020-12-31"), # 验证集
+                    "test": ("2021-01-01", "2025-06-20"), # 测试集
                 },
             },
         },
     }
 
-
+    # 4.初始化模型和数据集
+    print(f"task: {task}")
     model = init_instance_by_config(task["model"])
+
+    print(f"model: {model}")
     dataset = init_instance_by_config(task["dataset"])
 
-    # NOTE: This line is optional
-    # It demonstrates that the dataset can be used standalone.
+    print(f"dataset: {dataset}")
+
+    # NOTE: This line is optional # 可选的，说明数据集可以独立使用
+    # It demonstrates that the dataset can be used standalone. # 说明数据集可以独立使用
+    # 5.准备数据
     df = dataset.prepare("train")
     print(df.head())
 
@@ -152,45 +167,64 @@ if __name__ == "__main__":
                 "generate_portfolio_metrics": True,
             },
         },
+
+        # 交易策略
         "strategy": {
-            "class": "TopkDropoutStrategy", # 交易策略
+            "class": "TopkDropoutStrategy", 
             # "class": "MovingAverageStrategy",
             "module_path": "qlib.contrib.strategy.signal_strategy",
             "kwargs": {
                 "signal": (model, dataset),
-                "topk": 50, # 前50个股票
+                "topk": 50, # 50个股票
                 "n_drop": 5, # 5个股票  
             },
+            # TopkDropoutStrategy:每日等权持有topk=50只股票，
+            # 同时每日卖出持仓股票中最新预测收益最低的n_drop=5只股票
+            # 买入未持仓股票中最新预测收益最高的n_drop=5只股票。
         },
+
+        # 回测参数
         "backtest": {
             "start_time": "2021-01-01", # 测试开始时间
             "end_time": "2025-6-20", # 测试结束时间
-            "account": 100000, # 账户资金
-            "benchmark": CSI300_BENCH, # 基准指数
+            "account": 100000, # 账户启动资金
+            "benchmark": CSI300_BENCH, # 业绩比较基准指数
+            # 交易成本参数
             "exchange_kwargs": {
-                "freq": "day", # 频率
-                "limit_threshold": 0.095, # 涨跌停阈值
-                "deal_price": "close", # 成交价格
-                "open_cost": 0.00009, # 开仓成本
-                "close_cost": 0.0005, # 平仓成本
-                "min_cost": 1, # 最小成本
+                "freq": "day", # 交易频率
+                "limit_threshold": 0.095, # 涨跌停限制
+                "deal_price": "close", # 成交价格，按照收盘价格
+                "open_cost": 0.0001, # 开仓交易费率，万1佣金
+                "close_cost": 0.0006, # 平仓交易费率，万5印花税+万1佣金
+                "min_cost": 1, # 最低交易费用1元
             },
         },
     }
-    # start exp
-    with R.start(experiment_name="workflow"):
-        R.log_params(**flatten_dict(CSI300_GBDT_TASK))
+    
+    # start exp to trained model # 开始实验，训练模型
+    with R.start(experiment_name="train_model"):
+        R.log_params(**flatten_dict(task))
+        # 拟合模型
         model.fit(dataset)
         R.save_objects(**{"params.pkl": model})
 
-        # prediction
+        # 预测模型
+        recorder = R.get_recorder()
+        rid = R.get_recorder().id
+
+
+    # 运行回测
+    with R.start(experiment_name="crypto_backtest"):
+        # 加载训练好的模型
+        recorder = R.get_recorder(recorder_id=rid, experiment_name="train_model")
+        model = recorder.load_object("params.pkl")
+
+        # 创建回测recorder
         recorder = R.get_recorder()
         ba_rid = recorder.id
 
-        # Signal Analysis
         # 生成预测信号
         print("生成预测信号...")
-
         sr = SignalRecord(model, dataset, recorder)
         sr.generate()
 
@@ -202,7 +236,7 @@ if __name__ == "__main__":
         # backtest. If users want to use backtest based on their own prediction,
         # please refer to https://qlib.readthedocs.io/en/latest/component/recorder.html#record-template.
         par = PortAnaRecord(recorder, port_analysis_config, "day")
-        res = par.generate()
+        par.generate()
         
         print(f"回测完成! Recorder ID: {ba_rid}")
         print("done")

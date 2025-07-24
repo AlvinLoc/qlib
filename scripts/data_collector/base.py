@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-
+import os
 import abc
 import time
 import datetime
@@ -140,14 +140,26 @@ class BaseCollector(abc.ABC):
         symbol: str
 
         """
-        self.sleep()
-        df = self.get_data(symbol, self.interval, self.start_datetime, self.end_datetime)
-        _result = self.NORMAL_FLAG
-        if self.check_data_length > 0:
-            _result = self.cache_small_data(symbol, df)
-        if _result == self.NORMAL_FLAG:
-            self.save_instrument(symbol, df)
-        return _result
+        try:
+            self.sleep()
+            df = self.get_data(symbol, self.interval, self.start_datetime, self.end_datetime)
+            logger.info(f"[{symbol}] 数据获取成功，共{len(df)}条记录")
+            
+            _result = self.NORMAL_FLAG
+            if self.check_data_length > 0:
+                _result = self.cache_small_data(symbol, df)
+                if _result != self.NORMAL_FLAG:
+                    logger.warning(f"[{symbol}] 数据缓存异常: {_result}")
+            
+            if _result == self.NORMAL_FLAG:
+                self.save_instrument(symbol, df)
+                logger.info(f"[{symbol}] 数据保存成功")
+            
+            return _result
+        
+        except Exception as e:
+            logger.error(f"[{symbol}] 数据收集失败: {str(e)}", exc_info=True)
+            return f"ERROR: {str(e)}"
 
     def save_instrument(self, symbol, df: pd.DataFrame):
         """save instrument data to file
@@ -286,36 +298,108 @@ class Normalize:
         )
 
     def _executor(self, file_path: Path):
-        file_path = Path(file_path)
+        logger.critical(f"normalize file: {file_path}")
+        import signal
+        
+        class TimeoutException(Exception):
+            pass
+        
+        def handler(signum, frame):
+            raise TimeoutException("Execution timed out")
+        
+        signal.signal(signal.SIGALRM, handler)
+        signal.alarm(180000)  # 3分钟超时
+        
+        try:
+            file_path = Path(file_path)
+            target_file_path = self._target_dir.joinpath(file_path.name)
+            if os.path.exists(target_file_path):
+                logger.critical(f"target file exists: {target_file_path}")
+                return
 
-        # some symbol_field values such as TRUE, NA are decoded as True(bool), NaN(np.float) by pandas default csv parsing.
-        # manually defines dtype and na_values of the symbol_field.
-        default_na = pd._libs.parsers.STR_NA_VALUES  # pylint: disable=I1101
-        symbol_na = default_na.copy()
-        symbol_na.remove("NA")
-        columns = pd.read_csv(file_path, nrows=0).columns
-        df = pd.read_csv(
-            file_path,
-            dtype={self._symbol_field_name: str},
-            keep_default_na=False,
-            na_values={col: symbol_na if col == self._symbol_field_name else default_na for col in columns},
-        )
+            # some symbol_field values such as TRUE, NA are decoded as True(bool), NaN(np.float) by pandas default csv parsing.
+            # manually defines dtype and na_values of the symbol_field.
+            default_na = pd._libs.parsers.STR_NA_VALUES  # pylint: disable=I1101
+            symbol_na = default_na.copy()
+            symbol_na.remove("NA")
+            columns = pd.read_csv(file_path, nrows=0).columns
+            df = pd.read_csv(
+                file_path,
+                dtype={self._symbol_field_name: str},
+                keep_default_na=False,
+                na_values={col: symbol_na if col == self._symbol_field_name else default_na for col in columns},
+            )
 
-        # NOTE: It has been reported that there may be some problems here, and the specific issues will be dealt with when they are identified.
-        df = self._normalize_obj.normalize(df)
-        if df is not None and not df.empty:
-            if self._end_date is not None:
-                _mask = pd.to_datetime(df[self._date_field_name]) <= pd.Timestamp(self._end_date)
-                df = df[_mask]
-            df.to_csv(self._target_dir.joinpath(file_path.name), index=False)
+            # NOTE: It has been reported that there may be some problems here, and the specific issues will be dealt with when they are identified.
+            df = self._normalize_obj.normalize(df)
+            if df is not None and not df.empty:
+                if self._end_date is not None:
+                    _mask = pd.to_datetime(df[self._date_field_name]) <= pd.Timestamp(self._end_date)
+                    df = df[_mask]
+                df.to_csv(self._target_dir.joinpath(file_path.name), index=False)
+        except TimeoutException as te:
+            logger.error(f"normalize file timeout: {file_path}")
+            raise te
+        except Exception as e:
+            logger.error(f"normalize file error: {file_path} - {e}")
+            # 获取csv的所有date列 将2024-08-12 09:30:00+08:00改为2024-08-12
+            df = pd.read_csv(file_path)
+            date_columns = [col for col in df.columns if "date" in col.lower()]
+            for col in date_columns:
+                if len(df[col]) > 10:
+                    logger.info(f"date column: {df[col]} to {df[col].str[:10]}")
+                    df[col] = df[col].str[:10]
+            new_file_path = str(file_path).replace(".csv", "_format.csv")
+            file_path = Path(new_file_path)
+            df.to_csv(file_path, index=False)
+            logger.critical(f"fixed file: {file_path}")
+            try:
+                file_path = Path(file_path)
+
+                # some symbol_field values such as TRUE, NA are decoded as True(bool), NaN(np.float) by pandas default csv parsing.
+                # manually defines dtype and na_values of the symbol_field.
+                default_na = pd._libs.parsers.STR_NA_VALUES  # pylint: disable=I1101
+                symbol_na = default_na.copy()
+                symbol_na.remove("NA")
+                columns = pd.read_csv(file_path, nrows=0).columns
+                df = pd.read_csv(
+                    file_path,
+                    dtype={self._symbol_field_name: str},
+                    keep_default_na=False,
+                    na_values={col: symbol_na if col == self._symbol_field_name else default_na for col in columns},
+                )
+
+                # NOTE: It has been reported that there may be some problems here, and the specific issues will be dealt with when they are identified.
+                df = self._normalize_obj.normalize(df)
+                if df is not None and not df.empty:
+                    if self._end_date is not None:
+                        _mask = pd.to_datetime(df[self._date_field_name]) <= pd.Timestamp(self._end_date)
+                        df = df[_mask]
+                    df.to_csv(self._target_dir.joinpath(file_path.name), index=False)
+            except Exception as e:
+                logger.error(f"normalize file error: {file_path} - {e}")
+        finally:
+            signal.alarm(0)  # 重置定时器
 
     def normalize(self):
         logger.info("normalize data......")
+        import warnings
+        
+        # 屏蔽FutureWarning
+        warnings.simplefilter('ignore', category=FutureWarning)
+        from multiprocessing import Pool
 
-        with ProcessPoolExecutor(max_workers=self._max_workers) as worker:
-            file_list = list(self._source_dir.glob("*.csv"))
-            with tqdm(total=len(file_list)) as p_bar:
-                for _ in worker.map(self._executor, file_list):
+        # with ProcessPoolExecutor(max_workers=(self._max_workers // 2)) as worker:
+        file_list = list(self._source_dir.glob("*.csv"))
+        unexisted_file_list = []
+        for file_path in file_list:
+            target_file_path = self._target_dir.joinpath(file_path.name)
+            if not os.path.exists(target_file_path) and  "format" not in file_path.name:
+                unexisted_file_list.append(file_path)
+        logger.info(f"unexisted normalize data file list: {len(unexisted_file_list)}")
+        with Pool(self._max_workers // 2) as worker:
+            with tqdm(total=len(unexisted_file_list)) as p_bar:
+                for _ in worker.imap_unordered(self._executor, unexisted_file_list):
                     p_bar.update()
 
 
