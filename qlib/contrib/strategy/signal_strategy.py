@@ -292,6 +292,12 @@ class TopkDropoutStrategy(BaseSignalStrategy):
                 direction=Order.BUY,  # 1 for buy
             )
             buy_order_list.append(buy_order)
+        # # 打印每日交易决策
+        print(f"[交易决策] 日期: {trade_start_time}")
+        print(f"  卖出股票: {[o.stock_id for o in sell_order_list]}")
+        print(f"  买入股票: {[o.stock_id for o in buy_order_list]}")
+        for order in sell_order_list + buy_order_list:
+            print(f"    股票: {order.stock_id}, 数量: {order.amount}, 方向: {'买入' if order.direction==1 else '卖出'}, 起始: {order.start_time}, 结束: {order.end_time}")
         return TradeDecisionWO(sell_order_list + buy_order_list, self)
 
 

@@ -26,34 +26,45 @@ if __name__ == "__main__":
     # GetData().qlib_data(target_dir=provider_uri, region=REG_CN, exists_skip=True)
     qlib.init(provider_uri=provider_uri, region=REG_CN)
 
-    tradedate = D.calendar(start_time='2008-01-01',end_time='2025-6-20',freq='day')
-    print(tradedate[:5])
+    # 日期设置
+    start_time_refine = '2024-01-01'
+    end_time_refine = '2025-07-17'
 
-    # 2.获取所有证券代码
-    instruments = D.instruments(market='all')
+    fit_start_time_refine = '2024-01-01'
+    fit_end_time_refine = '2024-12-31'
+
+    valid_start_time_refine = '2025-01-01'
+    valid_end_time_refine = '2025-05-20'
+
+    test_start_time_refine = '2025-05-21'
+
+    tradedate = D.calendar(
+        start_time= start_time_refine ,
+        end_time= end_time_refine ,
+        freq='day')
+    print(f"交易日历长度: {len(tradedate)}")
+    print(f"最近5个交易日: {tradedate[-5:]}")
+
+
+    # 获取股票列表
+    # from qlib.data.filter import NameDFilter, ExpressionDFilter
+    #静态Filter:北交所A股
+    # nameDFilter = NameDFilter(name_rule_re='BJ[0-9!]')
+    # 动态Filter:后复权价格大于等于1元
+    # expressionDFilter = ExpressionDFilter(rule_expression = '$close>=1')
+    #按以上两个过滤条件获取新的股票代码集
+    instruments = D.instruments(
+        market='all'
+        # filter_pipe=[expressionDFilter]
+        )
     stock_list = D.list_instruments(
         instruments=instruments,
         # start_time='2008-01-01',
         # end_time='2025-06-20',
         as_list=True)
-
-    print(f"所有股票数量: {len(stock_list)}")
-
-
-    from qlib.data.filter import NameDFilter, ExpressionDFilter
-    #静态Filter:北交所A股
-    nameDFilter = NameDFilter(name_rule_re='BJ[0-9!]')
-    # 动态Filter:后复权价格大于等于1元
-    expressionDFilter = ExpressionDFilter(rule_expression = '$close>=1')
-    #按以上两个过滤条件获取新的股票代码集
-    instruments = D.instruments(market='all')
-    stock_list = D.list_instruments(
-        instruments=instruments,
-        start_time='2008-01-01',
-        end_time='2025-06-20',
-        as_list=True)
     # 展示条件过滤后的5个股票代码
-    print("条件过滤后的5个股票代码：")
+    print(f"所有股票数量: {len(stock_list)}")
+    print("后的5个股票代码：")
     print(stock_list[-5:])
 
     #3.获取指定股票指定日期指定字段数据
@@ -67,28 +78,15 @@ if __name__ == "__main__":
     data_handler_config = {
 
         # 完整数据起止日期
-        "start_time": "2008-01-01",
-        "end_time": "2025-06-20",
+        "start_time": start_time_refine,
+        "end_time": end_time_refine,
 
         # 拟合数据起止日期，为完整数据起止日期数据的子集
-        "fit_start_time": "2008-01-01",
-        "fit_end_time": "2018-12-31",
+        "fit_start_time": fit_end_time_refine,
+        "fit_end_time": fit_end_time_refine,
 
         # 股票池
-        # "instruments": instruments,
-        "instruments": "csi300" , # 沪深300
-        # "instruments": "csi500" , # 中证500
-        # "instruments": "csi1000" , # 中证1000
-        # "instruments": "csi3000" , # 中证3000
-        # "instruments": "csi5000" , # 中证5000
-        # "instruments": "csi10000" , # 中证10000
-        # "instruments": "csi100000" , # 中证100000
-        # "instruments": "sz500" , # 上证500
-        # "instruments": "sz1000" , # 上证1000
-        # "instruments": "sz1500" , # 上证1500
-        # "instruments": "sz2000" , # 上证2000
-        # "instruments": "sz2500" , # 上证2500
-        # "instruments": "sz3000" , # 上证3000
+        "instruments": instruments,
         # "instruments": "sz3500" , # 上证3500
     }
 
@@ -134,9 +132,9 @@ if __name__ == "__main__":
                 },
                 # 数据集划分参数
                 "segments": {
-                    "train": ("2008-01-01", "2018-12-31"), # 训练集
-                    "valid": ("2019-01-01", "2020-12-31"), # 验证集
-                    "test": ("2021-01-01", "2025-06-20"), # 测试集
+                    "train": ( fit_start_time_refine, fit_end_time_refine), # 训练集
+                    "valid": ( valid_start_time_refine, valid_end_time_refine), # 验证集
+                    "test": ( test_start_time_refine, end_time_refine), # 测试集
                 },
             },
         },
@@ -185,8 +183,8 @@ if __name__ == "__main__":
 
         # 回测参数
         "backtest": {
-            "start_time": "2021-01-01", # 测试开始时间
-            "end_time": "2025-6-20", # 测试结束时间
+            "start_time": test_start_time_refine, # 测试开始时间
+            "end_time": end_time_refine, # 测试结束时间
             "account": 100000, # 账户启动资金
             "benchmark": CSI300_BENCH, # 业绩比较基准指数
             # 交易成本参数
@@ -200,7 +198,9 @@ if __name__ == "__main__":
             },
         },
     }
-    
+
+    # import pudb; pudb.set_trace()
+
     # start exp to trained model # 开始实验，训练模型
     with R.start(experiment_name="train_model"):
         R.log_params(**flatten_dict(task))
@@ -236,7 +236,18 @@ if __name__ == "__main__":
         # backtest. If users want to use backtest based on their own prediction,
         # please refer to https://qlib.readthedocs.io/en/latest/component/recorder.html#record-template.
         par = PortAnaRecord(recorder, port_analysis_config, "day")
-        par.generate()
+        res = par.generate()
+
+        # 打印每日交易决策
+        orders = res.get('orders', None)
+        if orders is not None:
+            print("每日交易决策：")
+            for date, order_list in orders.items():
+                print(f"日期: {date}")
+                for order in order_list:
+                    print(f"  股票: {order.stock_id}, 数量: {order.amount}, 方向: {'买入' if order.direction==1 else '卖出'}, 起始: {order.start_time}, 结束: {order.end_time}")
+        else:
+            print("未找到每日订单信息")
         
         print(f"回测完成! Recorder ID: {ba_rid}")
         print("done")
