@@ -8,6 +8,7 @@ import pandas as pd
 
 from typing import Dict, List, Text, Tuple, Union
 from abc import ABC
+from datetime import datetime
 
 from qlib.data import D
 from qlib.data.dataset import Dataset
@@ -88,6 +89,8 @@ class TopkDropoutStrategy(BaseSignalStrategy):
         hold_thresh=1,
         only_tradable=False,
         forbid_all_trade_at_limit=True,
+        save_ranking=True,
+        ranking_output_dir_prefix="backtest_vis/TopkDropoutStrategy_1day",
         **kwargs,
     ):
         """
@@ -134,6 +137,13 @@ class TopkDropoutStrategy(BaseSignalStrategy):
         self.hold_thresh = hold_thresh
         self.only_tradable = only_tradable
         self.forbid_all_trade_at_limit = forbid_all_trade_at_limit
+        self.save_ranking = save_ranking
+        back_test_date = datetime.now().strftime('%Y%m%d')
+        self.ranking_output_dir = f"{ranking_output_dir_prefix}_{back_test_date}"
+
+        # 创建输出目录
+        if self.save_ranking:
+            os.makedirs(self.ranking_output_dir, exist_ok=True)
 
     def generate_trade_decision(self, execute_result=None):
         # get the number of trading step finished, trade_step can be [0, 1, 2, ..., trade_len - 1]
@@ -147,6 +157,10 @@ class TopkDropoutStrategy(BaseSignalStrategy):
             pred_score = pred_score.iloc[:, 0]
         if pred_score is None:
             return TradeDecisionWO([], self)
+            
+        # 保存每日股票排名
+        if self.save_ranking and pred_score is not None:
+            self._save_daily_ranking(pred_score, trade_start_time)
         if self.only_tradable:
             # If The strategy only consider tradable stock when make decision
             # It needs following actions to filter stocks
@@ -292,13 +306,164 @@ class TopkDropoutStrategy(BaseSignalStrategy):
                 direction=Order.BUY,  # 1 for buy
             )
             buy_order_list.append(buy_order)
-        # # 打印每日交易决策
-        print(f"[交易决策] 日期: {trade_start_time}")
-        print(f"  卖出股票: {[o.stock_id for o in sell_order_list]}")
-        print(f"  买入股票: {[o.stock_id for o in buy_order_list]}")
-        for order in sell_order_list + buy_order_list:
-            print(f"    股票: {order.stock_id}, 数量: {order.amount}, 方向: {'买入' if order.direction==1 else '卖出'}, 起始: {order.start_time}, 结束: {order.end_time}")
+        # 保存交易决策到CSV
+        self._save_trade_decision_to_csv(trade_start_time, sell_order_list, buy_order_list, current_temp)
         return TradeDecisionWO(sell_order_list + buy_order_list, self)
+        
+    def _save_daily_ranking(self, pred_score, trade_date):
+        """保存每日股票排名到CSV文件"""
+        try:
+            # 按预测分数排序
+            sorted_scores = pred_score.sort_values(ascending=False)
+            
+            # 获取前50名和后50名
+            top_50 = sorted_scores.head(50)
+            bottom_50 = sorted_scores.tail(50)
+            
+            # 创建排名数据
+            ranking_data = []
+            
+            # 添加前50名
+            for rank, (stock_id, score) in enumerate(top_50.items(), 1):
+                ranking_data.append({
+                    'date': trade_date,
+                    'stock_id': stock_id,
+                    'score': score,
+                    'rank': rank,
+                    'category': 'top_50'
+                })
+            
+            # 添加后50名
+            for rank, (stock_id, score) in enumerate(bottom_50.items(), 1):
+                ranking_data.append({
+                    'date': trade_date,
+                    'stock_id': stock_id,
+                    'score': score,
+                    'rank': len(sorted_scores) - 50 + rank,
+                    'category': 'bottom_50'
+                })
+            
+            # 转换为DataFrame
+            ranking_df = pd.DataFrame(ranking_data)
+            
+            # 保存到CSV文件
+            date_str = pd.to_datetime(trade_date).strftime('%Y%m%d')
+            filename = f"daily_ranking_{date_str}.csv"
+            filepath = os.path.join(self.ranking_output_dir, filename)
+            ranking_df.to_csv(filepath, index=False, encoding='utf-8-sig')
+            
+            # 打印信息
+            print(f"[排名保存] 日期: {trade_date}")
+            print(f"  前5名: {list(top_50.head().index)}")
+            print(f"  后5名: {list(bottom_50.tail().index)}")
+            print(f"  保存文件: {filepath}")
+            
+        except Exception as e:
+            print(f"保存排名失败: {e}")
+            
+    def _save_trade_decision_to_csv(self, trade_date, sell_order_list, buy_order_list, current_position):
+        """保存交易决策到CSV文件"""
+        try:
+            import os
+            import pandas as pd
+            
+            # 创建输出目录
+            output_dir = self.ranking_output_dir
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # 准备交易记录数据
+            trade_records = []
+            
+            # 添加卖出记录
+            for order in sell_order_list:
+                trade_records.append({
+                    'date': trade_date,
+                    'stock_id': order.stock_id,
+                    'action': '卖出',
+                    'amount': order.amount,
+                    'direction': 'SELL',
+                    'start_time': order.start_time,
+                    'end_time': order.end_time
+                })
+            
+            # 添加买入记录
+            for order in buy_order_list:
+                trade_records.append({
+                    'date': trade_date,
+                    'stock_id': order.stock_id,
+                    'action': '买入',
+                    'amount': order.amount,
+                    'direction': 'BUY',
+                    'start_time': order.start_time,
+                    'end_time': order.end_time
+                })
+            
+            # 获取交易后的持仓情况
+            position_records = []
+            stock_list = current_position.get_stock_list()
+            total_value = current_position.get_cash()
+            
+            for stock_id in stock_list:
+                stock_amount = current_position.get_stock_amount(stock_id)
+                if stock_amount > 0:
+                    # 这里可以添加股票价格计算，暂时用数量代替
+                    position_records.append({
+                        'date': trade_date,
+                        'stock_id': stock_id,
+                        'position_type': '持仓',
+                        'amount': stock_amount,
+                        'value': stock_amount  # 简化处理，实际应该乘以股价
+                    })
+                    total_value += stock_amount
+            
+            # 创建交易记录DataFrame
+            if trade_records:
+                trade_df = pd.DataFrame(trade_records)
+                trade_filename = f"trade_records_{pd.to_datetime(trade_date).strftime('%Y%m%d')}.csv"
+                trade_filepath = os.path.join(output_dir, trade_filename)
+                trade_df.to_csv(trade_filepath, index=False, encoding='utf-8-sig')
+            
+            # 创建持仓记录DataFrame
+            if position_records:
+                position_df = pd.DataFrame(position_records)
+                position_filename = f"position_records_{pd.to_datetime(trade_date).strftime('%Y%m%d')}.csv"
+                position_filepath = os.path.join(output_dir, position_filename)
+                position_df.to_csv(position_filepath, index=False, encoding='utf-8-sig')
+            
+            # 创建汇总记录
+            summary_record = {
+                'date': trade_date,
+                'sell_count': len(sell_order_list),
+                'buy_count': len(buy_order_list),
+                'total_trades': len(sell_order_list) + len(buy_order_list),
+                'position_count': len(stock_list),
+                'total_value': total_value,
+                'cash': current_position.get_cash()
+            }
+            
+            # 保存汇总记录到总文件
+            summary_filename = "trade_summary.csv"
+            summary_filepath = os.path.join(output_dir, summary_filename)
+            
+            # 读取现有汇总文件或创建新的
+            if os.path.exists(summary_filepath):
+                summary_df = pd.read_csv(summary_filepath, encoding='utf-8-sig')
+                summary_df = pd.concat([summary_df, pd.DataFrame([summary_record])], ignore_index=True)
+            else:
+                summary_df = pd.DataFrame([summary_record])
+            
+            summary_df.to_csv(summary_filepath, index=False, encoding='utf-8-sig')
+            
+            # 打印简要信息
+            print(f"[交易决策] 日期: {trade_date}")
+            print(f"  卖出: {len(sell_order_list)}只, 买入: {len(buy_order_list)}只")
+            print(f"  持仓: {len(stock_list)}只, 总价值: {total_value:.2f}")
+            print(f"  保存文件: {trade_filepath if trade_records else '无交易'}")
+            
+        except Exception as e:
+            print(f"保存交易决策失败: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 class WeightStrategyBase(BaseSignalStrategy):
