@@ -37,7 +37,7 @@ from ..utils import (
     read_period_data,
     get_period_list,
 )
-from ..utils.paral import ParallelExt
+from ..utils.paral import ParallelExt, ProgressParallelExt
 from .ops import Operators  # pylint: disable=W0611  # noqa: F401
 
 
@@ -572,6 +572,7 @@ class DatasetProvider(abc.ABC):
                 )
             )
 
+        print(f"workers: {workers}")
         data = dict(
             zip(
                 inst_l,

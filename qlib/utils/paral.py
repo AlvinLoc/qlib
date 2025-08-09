@@ -10,6 +10,7 @@ import joblib
 from joblib import Parallel, delayed
 from joblib._parallel_backends import MultiprocessingBackend
 import pandas as pd
+from tqdm import tqdm
 
 from queue import Empty, Queue
 import concurrent
@@ -28,6 +29,34 @@ class ParallelExt(Parallel):
                 self._backend_args["maxtasksperchild"] = maxtasksperchild  # pylint: disable=E1101
             else:
                 self._backend_kwargs["maxtasksperchild"] = maxtasksperchild  # pylint: disable=E1101
+
+
+class ProgressParallelExt(ParallelExt):
+    """带进度显示的并行处理类"""
+    
+    def __init__(self, *args, show_progress=True, progress_desc="处理进度", **kwargs):
+        self.show_progress = show_progress
+        self.progress_desc = progress_desc
+        super(ProgressParallelExt, self).__init__(*args, **kwargs)
+    
+    def __call__(self, iterable):
+        if not self.show_progress:
+            return super().__call__(iterable)
+
+        # 将iterable转换为list以便获取长度
+        if hasattr(iterable, '__len__'):
+            total = len(iterable)
+        else:
+            # 如果无法获取长度，先转换为list
+            iterable = list(iterable)
+            total = len(iterable)
+        
+        with tqdm(total=total, desc=self.progress_desc, unit="任务") as pbar:
+            results = []
+            for result in super().__call__(iterable):
+                results.append(result)
+                pbar.update(1)
+            return results
 
 
 def datetime_groupby_apply(

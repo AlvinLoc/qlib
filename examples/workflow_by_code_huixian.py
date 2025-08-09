@@ -7,6 +7,7 @@ Qlib provides two kinds of interfaces.
 
 The interface of (1) is `qrun XXX.yaml`.  The interface of (2) is script like this, which nearly does the same thing as `qrun XXX.yaml`
 """
+from asyncio import futures
 import qlib
 from qlib.constant import REG_CN
 from qlib.utils import init_instance_by_config, flatten_dict
@@ -17,9 +18,11 @@ from qlib.tests.config import CSI300_BENCH, CSI300_GBDT_TASK
 from qlib.data.dataset import DatasetH
 from qlib.data.dataset.handler import DataHandlerLP
 from qlib.data import D
+# from optimized_stock_filter import OptimizedStockFilter, create_optimized_filter_config
 
 # 训练模型
-if __name__ == "__main__":
+def main_workflow():
+    """主工作流程"""
     # use default data
     # 1.数据初始化并获取日历数据
     provider_uri = "~/.qlib/qlib_data/cn_data"  # target_dir
@@ -27,45 +30,55 @@ if __name__ == "__main__":
     qlib.init(provider_uri=provider_uri, region=REG_CN)
 
     # 日期设置
-    start_time_refine = '2024-01-01'
-    end_time_refine = '2025-07-17'
+    start_time_refine = '2022-01-01'
+    end_time_refine = '2025-08-05'
 
-    fit_start_time_refine = '2024-01-01'
-    fit_end_time_refine = '2024-12-31'
+    fit_start_time_refine = '2022-01-01'
+    fit_end_time_refine = '2024-02-25'
 
-    valid_start_time_refine = '2025-01-01'
-    valid_end_time_refine = '2025-05-20'
+    valid_start_time_refine = '2024-02-26'
+    valid_end_time_refine = '2025-03-20'
 
-    test_start_time_refine = '2025-05-21'
+    test_start_time_refine = '2025-03-21'
 
+
+    # 获取包含未来的交易日历
     tradedate = D.calendar(
-        start_time= start_time_refine ,
-        end_time= end_time_refine ,
-        freq='day')
+        start_time=start_time_refine,
+        end_time=end_time_refine,
+        freq='day',
+        future=True  # 关键：启用未来日期
+    )
     print(f"交易日历长度: {len(tradedate)}")
     print(f"最近5个交易日: {tradedate[-5:]}")
 
 
-    # 获取股票列表
+    # # 获取股票列表 - 使用高级过滤器
     # from qlib.data.filter import NameDFilter, ExpressionDFilter
-    #静态Filter:北交所A股
-    # nameDFilter = NameDFilter(name_rule_re='BJ[0-9!]')
-    # 动态Filter:后复权价格大于等于1元
-    # expressionDFilter = ExpressionDFilter(rule_expression = '$close>=1')
+
+    # # 创建排除过滤器 - 排除BJ、SZ300、SZ301、SH688开头的股票
+    # exclude_filter = NameDFilter(name_rule_re='^(?!BJ[0-9]+)(?!SZ30[0-9]+)(?!SH688[0-9]+).*$')
+
+    # # 创建过滤器列表
+    # filter_list = [exclude_filter]
+
     #按以上两个过滤条件获取新的股票代码集
     instruments = D.instruments(
-        market='all'
-        # filter_pipe=[expressionDFilter]
+        market='all',
+        # filter_pipe=filter_list
         )
+        
     stock_list = D.list_instruments(
         instruments=instruments,
-        # start_time='2008-01-01',
-        # end_time='2025-06-20',
         as_list=True)
-    # 展示条件过滤后的5个股票代码
-    print(f"所有股票数量: {len(stock_list)}")
-    print("后的5个股票代码：")
-    print(stock_list[-5:])
+
+    # 展示过滤结果
+    print(f"过滤后股票数量: {len(stock_list)}")
+    if len(stock_list) > 0:
+        print("前5个股票代码：")
+        print(stock_list[:5])
+        print("后5个股票代码：")
+        print(stock_list[-5:])
 
     #3.获取指定股票指定日期指定字段数据
     # features_df = D.features(instruments=['SZ300891'],
@@ -134,7 +147,7 @@ if __name__ == "__main__":
                 "segments": {
                     "train": ( fit_start_time_refine, fit_end_time_refine), # 训练集
                     "valid": ( valid_start_time_refine, valid_end_time_refine), # 验证集
-                    "test": ( test_start_time_refine, end_time_refine), # 测试集
+                    "test": ( test_start_time_refine, end_time_refine), # 测试集 - 包含未来
                 },
             },
         },
@@ -175,6 +188,7 @@ if __name__ == "__main__":
                 "signal": (model, dataset),
                 "topk": 50, # 50个股票
                 "n_drop": 5, # 5个股票  
+                # "future_mode": True, # 关键：启用未来模式
             },
             # TopkDropoutStrategy:每日等权持有topk=50只股票，
             # 同时每日卖出持仓股票中最新预测收益最低的n_drop=5只股票
@@ -240,14 +254,17 @@ if __name__ == "__main__":
 
         # 打印每日交易决策
         orders = res.get('orders', None)
-        if orders is not None:
-            print("每日交易决策：")
-            for date, order_list in orders.items():
-                print(f"日期: {date}")
-                for order in order_list:
-                    print(f"  股票: {order.stock_id}, 数量: {order.amount}, 方向: {'买入' if order.direction==1 else '卖出'}, 起始: {order.start_time}, 结束: {order.end_time}")
-        else:
-            print("未找到每日订单信息")
+        # if orders is not None:
+        #     print("每日交易决策：")
+        #     for date, order_list in orders.items():
+        #         print(f"日期: {date}")
+        #         for order in order_list:
+        #             print(f"  股票: {order.stock_id}, 数量: {order.amount}, 方向: {'买入' if order.direction==1 else '卖出'}, 起始: {order.start_time}, 结束: {order.end_time}")
+        # else:
+        #     print("未找到每日订单信息")
         
-        print(f"回测完成! Recorder ID: {ba_rid}")
-        print("done")
+        # print(f"回测完成! Recorder ID: {ba_rid}")
+        # print("done")
+
+if __name__ == "__main__":
+    main_workflow()
