@@ -6,4 +6,6 @@ from qlib.tests.data import GetData
 
 
 if __name__ == "__main__":
-    fire.Fire(GetData)
+    # fire.Fire(GetData)
+    ret = GetData().qlib_data()
+    print(ret)
