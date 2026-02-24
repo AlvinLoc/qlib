@@ -1,36 +1,43 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-从csi1000-online中取前300只股票，保存为csi1000-online-300
+从all.txt中获取所有未退市的股票，保存为csi1000-online-all
 """
 
 import os
 
 # 输入文件路径
-input_file = os.path.expanduser('~/.qlib/qlib_data/cn_data/instruments/csi1000-online.txt')
+all_file = os.path.expanduser('~/.qlib/qlib_data/cn_data/instruments/all.txt')
 # 输出文件路径
-output_file = os.path.expanduser('~/.qlib/qlib_data/cn_data/instruments/csi1000-online-300.txt')
+output_file = os.path.expanduser('~/.qlib/qlib_data/cn_data/instruments/csi1000-online-all.txt')
 
-print(f"Reading stocks from {input_file}")
-print(f"Output will be saved to {output_file}")
+print(f"Reading stocks from {all_file}")
+print(f"Output will be saved to: {output_file}")
 
-# 读取csi1000-online股票
-with open(input_file, 'r', encoding='utf-8') as f:
-    lines = f.readlines()
-
-# 取前300只股票
-stocks_300 = lines[:300]
+# 读取all.txt中的所有股票
+all_stocks = set()
+if os.path.exists(all_file):
+    with open(all_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            if line.strip():
+                stock_code = line.strip().split('\t')[0]
+                all_stocks.add(stock_code)
+    
+    print(f"Total stocks in all.txt: {len(all_stocks)}")
+else:
+    print(f"Warning: {all_file} does not exist")
+    all_stocks = set()
 
 # 删除旧的输出文件（如果存在）
 if os.path.exists(output_file):
     os.remove(output_file)
     print(f"Removed old output file: {output_file}")
 
-# 保存前300只股票
+# 保存所有股票
 with open(output_file, 'w', encoding='utf-8') as f:
-    f.writelines(stocks_300)
+    for stock in sorted(all_stocks):
+        f.write(f"{stock}\n")
 
 print(f"\nFilter completed!")
-print(f"Total csi1000-online stocks: {len(lines)}")
-print(f"Selected stocks (first 300): {len(stocks_300)}")
-print(f"\ncsi1000-online-300 stock dataset has been saved to: {output_file}")
+print(f"Total stocks saved: {len(all_stocks)}")
+print(f"\ncsi1000-online-all stock dataset has been saved to: {output_file}")
