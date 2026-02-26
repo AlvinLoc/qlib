@@ -108,7 +108,7 @@ class GetData:
         
         # Then check if the URL exists
         try:
-            response = requests.head(url, timeout=10, allow_redirects=True)
+            response = requests.head(url, timeout=300, allow_redirects=True)
             return response.status_code == 200
         except Exception as e:
             logger.debug(f"URL check failed: {e}")
@@ -126,6 +126,7 @@ class GetData:
             The location where the data is saved, including the file name.
         """
         import hashlib
+        import tempfile
         
         # Create cache directory
         cache_dir = Path.home() / ".qlib" / "cache"
@@ -135,32 +136,70 @@ class GetData:
         url_hash = hashlib.md5(url.encode()).hexdigest()
         cache_file = cache_dir / url_hash
         
-        # If cache exists, copy from cache
+        # If cache exists, verify integrity before using
         if cache_file.exists():
-            logger.info(f"Using cached file for URL: {url}")
-            shutil.copy2(cache_file, target_path)
-            return
+            # Check cache file size (should be > 0)
+            cache_size = cache_file.stat().st_size
+            if cache_size > 0:
+                logger.info(f"Using cached file for URL: {url}")
+                shutil.copy2(cache_file, target_path)
+                return
+            else:
+                logger.warning(f"Cache file exists but has invalid size: {cache_size}, removing...")
+                cache_file.unlink()
         
-        # Otherwise, download and cache
+        # Otherwise, download to temp file first
         file_name = str(target_path).rsplit("/", maxsplit=1)[-1]
-        resp = requests.get(url, stream=True, timeout=600)
-        resp.raise_for_status()
-        if resp.status_code != 200:
-            raise requests.exceptions.HTTPError()
-
-        chunk_size = 1024
-        logger.warning(
-            f"The data for the example is collected from Yahoo Finance. Please be aware that the quality of the data might not be perfect. (You can refer to the original data source: https://finance.yahoo.com/lookup.)"
-        )
-        logger.info(f"{os.path.basename(file_name)} downloading......")
+        target_dir = str(target_path).rsplit("/", maxsplit=1)[0] if "/" in str(target_path) else str(target_path).rsplit("/", maxsplit=1)[0]
         
-        # Download to both target path and cache
-        with tqdm(total=int(resp.headers.get("Content-Length", 0))) as p_bar:
-            with target_path.open("wb") as fp, cache_file.open("wb") as cache_fp:
-                for chunk in resp.iter_content(chunk_size=chunk_size):
-                    fp.write(chunk)
-                    cache_fp.write(chunk)
-                    p_bar.update(chunk_size)
+        # Create temp file in same directory
+        temp_file = Path(target_dir) / f"{file_name}.tmp"
+        
+        try:
+            resp = requests.get(url, stream=True, timeout=600)
+            resp.raise_for_status()
+            if resp.status_code != 200:
+                raise requests.exceptions.HTTPError()
+
+            chunk_size = 1024
+            logger.warning(
+                f"The data for example is collected from Yahoo Finance. Please be aware that the quality of the data might not be perfect. (You can refer to the original data source: https://finance.yahoo.com/lookup.)"
+            )
+            logger.info(f"{os.path.basename(file_name)} downloading......")
+            
+            # Download to temp file first
+            with tqdm(total=int(resp.headers.get("Content-Length", 0))) as p_bar:
+                with temp_file.open("wb") as fp:
+                    for chunk in resp.iter_content(chunk_size=chunk_size):
+                        fp.write(chunk)
+                        p_bar.update(chunk_size)
+            
+            # Verify temp file size
+            temp_size = temp_file.stat().st_size
+            if temp_size == 0:
+                raise RuntimeError(f"Downloaded file is empty: {temp_file}")
+            
+            # Now copy to both target path and cache (atomic operation)
+            shutil.copy2(temp_file, target_path)
+            shutil.copy2(temp_file, cache_file)
+            
+            # Remove temp file
+            temp_file.unlink()
+            
+            logger.info(f"Download completed and cached: {file_name}")
+            
+        except Exception as e:
+            # Clean up temp file on error
+            if temp_file.exists():
+                temp_file.unlink()
+            # Also remove corrupted cache if exists
+            if cache_file.exists():
+                try:
+                    cache_file.unlink()
+                    logger.warning(f"Removed corrupted cache: {cache_file}")
+                except Exception:
+                    pass
+            raise
 
     def download_data(self, file_name: str, target_dir: [Path, str], delete_old: bool = True):
         """
