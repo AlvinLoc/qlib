@@ -9,10 +9,30 @@ import shutil
 import zipfile
 import requests
 import datetime
+import subprocess
 from tqdm import tqdm
 from pathlib import Path
 from loguru import logger
 from qlib.utils import exists_qlib_data
+
+MIRROR_URLS = [
+    "https://gh-proxy.com/{url}",
+    "https://mirror.ghproxy.com/{url}",
+    "https://gh.api.99988866.xyz/{url}",
+]
+
+
+def get_fast_url(url: str) -> str:
+    for mirror in MIRROR_URLS:
+        try:
+            mirror_url = mirror.format(url=url)
+            resp = requests.head(mirror_url, timeout=10)
+            if resp.status_code == 200:
+                logger.info(f"Using mirror: {mirror}")
+                return mirror_url
+        except Exception:
+            continue
+    return url
 
 
 class GetData:
@@ -62,53 +82,8 @@ class GetData:
         raise FileNotFoundError(f"No valid URL found for the file: {file_name}")
 
     def _check_url_exists(self, url: str) -> bool:
-        """
-        Check if a URL exists by sending a HEAD request
-        
-        Parameters
-        ----------
-        url: str
-            The URL to check
-            
-        Returns
-        -------
-        bool
-            True if the URL exists, False otherwise
-        """
-        import socket
-        import time
-        
-        # First check if GitHub is reachable
-        def is_github_reachable():
-            try:
-                # Try to connect to GitHub's IP address
-                socket.create_connection(("github.com", 443), timeout=5)
-                return True
-            except Exception:
-                return False
-        
-        # Wait for GitHub to be reachable, up to 1 hour
-        max_wait_time = 3600  # 1 hour in seconds
-        start_time = time.time()
-        wait_interval = 30  # Check every 30 seconds
-        
-        while time.time() - start_time < max_wait_time:
-            if is_github_reachable():
-                logger.info("GitHub is now reachable, checking URL")
-                break
-            else:
-                elapsed_time = int(time.time() - start_time)
-                remaining_time = int(max_wait_time - elapsed_time)
-                logger.warning(f"GitHub is not reachable, waiting {wait_interval} seconds... ({elapsed_time}s elapsed, {remaining_time}s remaining)")
-                time.sleep(wait_interval)
-        else:
-            # Timed out waiting for GitHub to be reachable
-            logger.error(f"Timed out waiting for GitHub to be reachable after {max_wait_time} seconds")
-            return False
-        
-        # Then check if the URL exists
         try:
-            response = requests.head(url, timeout=300, allow_redirects=True)
+            response = requests.head(url, timeout=30, allow_redirects=True)
             return response.status_code == 200
         except Exception as e:
             logger.debug(f"URL check failed: {e}")
@@ -156,12 +131,28 @@ class GetData:
         temp_file = Path(target_dir) / f"{file_name}.tmp"
         
         try:
+            # Try aria2c first for multi-threaded download
+            try:
+                logger.info(f"Using aria2c for accelerated download: {file_name}")
+                subprocess.run(
+                    ["aria2c", "-x", "16", "-s", "16", "-d", str(target_dir), "-o", os.path.basename(target_path), url],
+                    check=True,
+                    timeout=1800,
+                )
+                if Path(target_path).exists():
+                    shutil.copy2(target_path, cache_file)
+                    logger.info(f"Download completed with aria2c: {file_name}")
+                    return
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                pass
+            
+            # Fallback to requests
             resp = requests.get(url, stream=True, timeout=600)
             resp.raise_for_status()
             if resp.status_code != 200:
                 raise requests.exceptions.HTTPError()
 
-            chunk_size = 1024
+            chunk_size = 1024 * 1024  # 1MB chunk
             logger.warning(
                 f"The data for example is collected from Yahoo Finance. Please be aware that the quality of the data might not be perfect. (You can refer to the original data source: https://finance.yahoo.com/lookup.)"
             )
@@ -234,6 +225,7 @@ class GetData:
         target_path = target_dir.joinpath(_target_file_name)
 
         url = self.merge_remote_url(file_name)
+        url = get_fast_url(url)
         self.download(url=url, target_path=target_path)
 
         # Handle different file types
